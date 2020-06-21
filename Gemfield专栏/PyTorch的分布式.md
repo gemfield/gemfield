@@ -191,7 +191,7 @@ API。在DataParallel出生的年代，PyTorch官方就开始推荐使用nn.Data
 
 上述步骤提到的gather、reduce、scatter、broadcast都是来自MPI为代表的并行计算世界的概念，其中broadcast是主进程将相同的数据分发给组里的每一个其它进程；scatter是主进程将数据的每一小部分给组里的其它进程；gather是将其它进程的数据收集过来；reduce是将其它进程的数据收集过来并应用某种操作（比如SUM），在gather和reduce概念前面还可以加上all，如all_gather，all_reduce，那就是多对多的关系了，如下图所示（注意reduce的操作不一定是SUM，PyTorch目前实现了SUM、PRODUCT、MAX、MIN这四种）：
 
-![](./PyTorch的分布式/v2-33ce4e0a47263e65e49936e3961a5eaa_b.jpg)
+![](PyTorch的分布式/v2-33ce4e0a47263e65e49936e3961a5eaa_b.jpg)
 
 DataParallel通过复制一个网络到多个cuda设备，然后再split一个batch的data到多个cuda设备，通过这种并行计算的方式解决了batch很大的问题，但也有自身的不足：
 
