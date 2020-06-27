@@ -312,14 +312,23 @@ d_p = d_p + buf * momentum
 
 ##  **4，L2正则**
 
-为了防止过拟合而在loss上加的L2 penalty: ˜( **** ) = ( **** ) + * **^** 2 / 2，导致更新权重的公式变成了(
-是权重parameter、 是学习率、 是正则系数)：
+为了防止过拟合而在loss上加的L2 penalty:
 
-← − * (∂ /∂ )− * *
+    
+    
+    newE(w) = E(w) + weight_decay * w^2 / 2
 
-← − * ( (∂ /∂ ) + * )
+导致更新权重的公式变成了(w是权重parameter、lr是学习率、weight_decay是正则系数)：
 
-这个逻辑正好和优化器相关， 正是PyTorch优化器中的weight_decay入参，而整个逻辑正是实现在了PyTorch优化器的step()方法中：
+    
+    
+    # w 代表weights
+    w =  w - lr * (∂E / ∂w) - lr * weight_decay * w
+    
+    # p代表parameter，d_p代表梯度
+    w =  w - lr * (d_p + weight_decay * p)
+
+这个逻辑正好和优化器相关，weight_decay正是PyTorch优化器中的weight_decay入参，而整个逻辑正是实现在了PyTorch优化器的step()方法中：
 
     
     
@@ -327,7 +336,7 @@ d_p = d_p + buf * momentum
       d_p = d_p.add(p, alpha=weight_decay)
 
 也就是说，如果在构造优化器的时候传入了weight_decay参数，那么梯度首先会应用L2 penalty：d_p = d_p + (p *
-weight_decay)。这正是实现了 ← − * ( (∂ /∂ ) + * )公式中的括号内部分。
+weight_decay)。这正是实现了上述公式中的括号内部分。
 
 ##  **总结**
 
