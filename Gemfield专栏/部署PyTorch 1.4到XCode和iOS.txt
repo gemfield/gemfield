@@ -1,0 +1,246 @@
+背景
+最近需要将一个模型运行在iOS设备上。一年前，Gemfield还在PyTorch 1.0上工作的时候，Gemfield已经做过这个事情，先后有几个相关的PR也被merge到官方仓库了，并且也写了这篇专栏文章：
+Gemfield：部署PyTorch到iOS上
+​zhuanlan.zhihu.com/p/60563168
+但是，PyTorch 1.3之后，有些内容就过时了。具体来说，如今部署PyTorch模型到iOS上依然有2种方法：
+1，PyTorch -> ONNX -> CoreML -> iOS
+这个流程没有过时，依旧参考Gemfield专栏文章（虽然该篇文章也准备更新下）：
+Gemfield：部署PyTorch模型到终端
+276 赞同 · 35 评论文章
+
+2，PyTorch -> iOS
+也就是直接编译PyTorch的推理框架成为iOS上的静态库，自然PyTorch的模型就能直接在iOS上被解析执行了。和上次的专栏文章相比，这个过程发生了一些变化，本文中，Gemfield就来详细解释下这些变化。
+iOS上PyTorch库的变化
+到了PyTorch1.3，PyTorch对iOS和Android的支持更友好了，体现在以下几个方面：
+TorchScript成熟了，通过jit将模型序列化，摆脱对Python对依赖，提高运行时的效率；
+提供了手机App中ML部分经常需要用到的预处理和工程集成API；
+支持ARM CPU架构上的QNNPACK quantized kernel libraries；
+编译层面的优化，支持自定义需要编译的operator；
+在移动端的CPU和GPU上进一步做了性能优化。
+好了，当我们准备好在Xcode上使用PyTorch库的时候，有两种方法：Pod安装和自己编译。
+使用Pod安装PyTorch库到Xcode
+Pod是cocoapods的命令，cocoapods是iOS开发中三方库的自动管理工具。使用Pod来安装PyTorch库到Xcode的方法如下：
+#安装Pod
+sudo gem install cocoapods
+
+#在Xcode项目根目录下，创建空的pod文件
+pod init
+经过pod init后，Podfile文件会在项目根目录下生成。打开Podfile，在文件中添加：
+platform :ios, '12.0'
+target 'SYSZUXcv7' do
+  pod 'LibTorch', '~>1.4.0'
+end
+其中，platform、target、LibTorch的版本按照自己的实际修改。
+然后执行Pod的安装命令：
+Pod install
+这个过程会下载LibTorch库，并且会修改Xcode的项目文件（如project.pbxproj等），这样当你下次打开该Xcode项目后，你会发现PyTorch的依赖已经自动配置到项目中了。
+在Xcode中重新打开该项目：点击SYSZUXcv7.xcworkspace。
+上述Pod安装的PyTorch官方库是如何编译的？
+PyTorch官方是如何编译Pod中维护的iOS库呢？我们不妨先看看官方的CI系统是如何做的。在circleci的config.yaml中：
+- binary_ios_build:
+    name: pytorch_ios_11_2_1_nightly_x86_64_build
+    build_environment: "libtorch-ios-11.2.1-nightly-x86_64-build"
+    context: org-member
+    ios_platform: "SIMULATOR"
+    ios_arch: "x86_64"
+    requires: 
+      - setup
+
+- binary_ios_build:
+    name: pytorch_ios_11_2_1_nightly_arm64_build
+    build_environment: "libtorch-ios-11.2.1-nightly-arm64-build"
+    context: org-member
+    ios_arch: "arm64"
+    ios_platform: "OS"
+    requires: 
+      - setup
+
+- binary_ios_upload:
+    build_environment: "libtorch-ios-11.2.1-nightly-binary-build-upload"
+    context: org-member
+    requires:
+      - setup
+      - pytorch_ios_11_2_1_nightly_x86_64_build
+      - pytorch_ios_11_2_1_nightly_arm64_build
+在workerflow中设置的job，内容如下：
+binary_ios_build:
+  <<: *pytorch_ios_params
+  macos:
+    xcode: "11.2.1"
+  steps:
+  - run_brew_for_ios_build
+  - run:
+      command: |
+        script="/Users/distiller/project/.circleci/scripts/binary_ios_build.sh"
+        source "$script"
+  - run:
+      command: |
+        script="/Users/distiller/project/.circleci/scripts/binary_ios_test.sh"
+        source "$script"
+
+binary_ios_upload:
+  <<: *pytorch_ios_params
+  macos:
+    xcode: "11.2.1"
+  steps:
+  - run_brew_for_ios_build
+  - run:
+      command: |
+        script="/Users/distiller/project/.circleci/scripts/binary_ios_upload.sh"
+        source "$script"
+你不需要看上面的细节内容，Gemfield直接给你总结出来：
+1，在macOS上升级brew
+for path in $(find /usr/local/Homebrew -type d -name .git)
+do
+cd $path/..
+git fetch --depth=1 origin
+git reset --hard origin/master
+done
+
+export HOMEBREW_NO_AUTO_UPDATE=1
+brew unlink parallel
+brew install moreutils
+brew link parallel --overwrite
+brew install expect
+2，安装libtool
+export HOMEBREW_NO_AUTO_UPDATE=1
+brew install libtool
+3，执行.circleci/scripts/binary_ios_build.sh
+这个脚本里的主要工作有👇这些内容：
+安装conda及python包依赖：
+conda install numpy ninja pyyaml mkl mkl-include setuptools cmake cffi typing requests --yes
+export CMAKE_PREFIX_PATH=${CONDA_PREFIX:-"$(dirname $(which conda))/../"}
+更新pytorch库：
+cd ${PROJ_ROOT}
+git submodule sync
+git submodule update --init --recursive
+运行build脚本：
+chmod a+x ${PROJ_ROOT}/scripts/build_ios.sh
+echo "IOS_ARCH: ${IOS_ARCH}"
+echo "IOS_PLATFORM: ${IOS_PLATFORM}"
+export BUILD_PYTORCH_MOBILE=1
+export IOS_ARCH=${IOS_ARCH}
+export IOS_PLATFORM=${IOS_PLATFORM}
+
+#ts命令是moreutils包中的，用来将输出的每一行信息加上时间戳
+unbuffer ${PROJ_ROOT}/scripts/build_ios.sh 2>&1 | ts
+保存编译产物：
+cd ${WORKSPACE}
+DEST_DIR=${WORKSPACE}/ios
+mkdir -p ${DEST_DIR}
+cp -R ${PROJ_ROOT}/build_ios/install ${DEST_DIR}
+mv ${DEST_DIR}/install ${DEST_DIR}/${IOS_ARCH}
+4，执行.circleci/scripts/binary_ios_test.sh
+这个脚本的主要工作就是使用上述编译好的pytorch库来编译TestApp，具体步骤有：
+安装bundle、fastlane、证书：
+ROJ_ROOT=/Users/distiller/project
+cd ${PROJ_ROOT}/ios/TestApp
+sudo gem install bundler && bundle install
+echo "${IOS_CERT_KEY}" >> cert.txt
+base64 --decode cert.txt -o Certificates.p12
+rm cert.txt
+bundle exec fastlane install_cert
+安装provisioning profile：
+PROFILE=TestApp_CI.mobileprovision
+PROVISIONING_PROFILES=~/Library/MobileDevice/Provisioning\ Profiles
+mkdir -pv "${PROVISIONING_PROFILES}"
+cd "${PROVISIONING_PROFILES}"
+echo "${IOS_SIGN_KEY}" >> cert.txt
+base64 --decode cert.txt -o ${PROFILE}
+rm cert.txt
+经过这一步后，在macOS上的~/Library/MobileDevice/Provisioning\ Profiles/ 目录下会有：
+civilnet:~/CivilNet/pytorch$ ls -l ~/Library/MobileDevice/Provisioning\ Profiles/
+total 192
+-rw-r--r--  1 civilnet  staff  9367  2 21 17:03 0c5b98b7-710d-4b90-973c-b22d3fd8f096.mobileprovision
+-rw-r--r--  1 civilnet  staff  9367  2 19 23:57 68e237fa-9e1f-4684-958a-63d8378f40f0.mobileprovision
+-rw-r--r--  1 civilnet  staff  9367  2 19 23:41 TestApp_CI.mobileprovision
+ruby build来编译iOS App：
+PROFILE=TestApp_CI
+ruby ${PROJ_ROOT}/scripts/xcode_build.rb \
+-i ${PROJ_ROOT}/build_ios/install \
+-x ${PROJ_ROOT}/ios/TestApp/TestApp.xcodeproj \
+-p ${IOS_PLATFORM} -c ${PROFILE} -t ${IOS_DEV_TEAM_ID}
+这些参数的含义如下：
+-i参数为pytorch的cmake安装路径;
+-x为XCode项目文件;
+-p为当前编译的platform(OS或者模拟器);
+-c参数为code signing的provisioning profile;
+-t参数为development team ID。
+scripts/xcode_build.rb为pytorch仓库中的ruby文件，最后调用了xcodebuild命令：
+xcodebuild clean build  -project #{xcodeproj_path}  \
+-target #{target.name} -sdk #{sdk} \
+-configuration Release PROVISIONING_PROFILE_SPECIFIER=#{profile}
+5，执行.circleci/scripts/binary_ios_upload.sh
+如果前述编译没有问题的话，这个脚本会将编译产物打包为cocoapod中的zip包。具体步骤有：
+拷贝头文件：
+WORKSPACE=/Users/distiller/workspace
+PROJ_ROOT=/Users/distiller/project
+ARTIFACTS_DIR=${WORKSPACE}/ios
+ls ${ARTIFACTS_DIR}
+ZIP_DIR=${WORKSPACE}/zip
+mkdir -p ${ZIP_DIR}/install/lib
+mkdir -p ${ZIP_DIR}/src
+# copy header files
+cp -R ${ARTIFACTS_DIR}/arm64/include ${ZIP_DIR}/install/
+拷贝.a文件，除了nnpack只有arm64架构外，其它的.a库都用lipo命令将不同架构的打包到一起：
+# build a FAT bianry
+cd ${ZIP_DIR}/install/lib
+target_libs=(libc10.a libclog.a libcpuinfo.a libeigen_blas.a libpytorch_qnnpack.a libtorch_cpu.a libtorch.a libXNNPACK.a)
+for lib in ${target_libs[*]}
+do
+    if [ -f "${ARTIFACTS_DIR}/x86_64/lib/${lib}" ] && [ -f "${ARTIFACTS_DIR}/arm64/lib/${lib}" ]; then
+        libs=("${ARTIFACTS_DIR}/x86_64/lib/${lib}" "${ARTIFACTS_DIR}/arm64/lib/${lib}")
+        lipo -create "${libs[@]}" -o ${ZIP_DIR}/install/lib/${lib}
+    fi
+done
+# for nnpack, we only support arm64 build
+cp ${ARTIFACTS_DIR}/arm64/lib/libnnpack.a ./
+lipo -i ${ZIP_DIR}/install/lib/*.a
+拷贝umbrella header 和 license文件：
+cp ${PROJ_ROOT}/ios/LibTorch.h ${ZIP_DIR}/src/
+cp ${PROJ_ROOT}/LICENSE ${ZIP_DIR}/
+将所有的.h文件、.a文件、version.txt、LICENSE文件打包成zip：
+ZIPFILE=libtorch_ios_nightly_build.zip
+cd ${ZIP_DIR}
+#for testing
+touch version.txt
+echo $(date +%s) > version.txt
+zip -r ${ZIPFILE} install src version.txt LICENSE
+上传到aws：
+brew install awscli
+export AWS_ACCESS_KEY_ID=${AWS_S3_ACCESS_KEY_FOR_PYTORCH_BINARY_UPLOAD}
+export AWS_SECRET_ACCESS_KEY=${AWS_S3_ACCESS_SECRET_FOR_PYTORCH_BINARY_UPLOAD}
+aws s3 cp ${ZIPFILE} s3://ossci-ios-build/ --acl public-read
+自己编译iOS上的PyTorch库
+1，先安装anaconda
+推荐使用conda，对于混合python库和二进制库的管理很优秀。下面所有的python环境和命令都是在conda下。你可以使用官方安装的方式，也可以参考下面的命令行：
+curl --retry 3 -o ~/conda.sh https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-x86_64.sh
+chmod +x ~/conda.sh
+/bin/bash ~/conda.sh -b -p ~/anaconda
+export PATH="~/anaconda/bin:${PATH}"
+source ~/anaconda/bin/activate
+2，安装依赖包
+sudo pip install pyyaml
+sudo pip install typing
+3，确保xcodebuild已经安装
+gemfield:~/github/CivilNet/pytorch$ command -v xcodebuild
+/usr/bin/xcodebuild
+4，克隆PyTorch官方仓库
+如果是全新的克隆，则执行如下的命令：
+git clone --recursive https://github.com/pytorch/pytorch
+如果有已经克隆下的PyTorch仓库，则在仓库中运行如下更新命令：
+git submodule sync
+git submodule update --init --recursive
+5，编译XCode的iOS模拟器用的库
+在仓库根目录下，执行：
+BUILD_PYTORCH_MOBILE=1 IOS_PLATFORM=SIMULATOR ./scripts/build_ios.sh
+6，编译XCode的arm64架构的库
+在仓库根目录下，执行：
+BUILD_PYTORCH_MOBILE=1 IOS_ARCH=arm64 ./scripts/build_ios.sh
+如何在XCode上使用刚刚编译的PyTorch库
+1，在XCode上打开你的项目，拷贝所有的静态库和头文件到你的项目中。在project settings中，设置Header Search Paths为你刚刚拷贝的头文件的路径；
+2，在XCode项目的build settings中，找到other linker flags，添加如下的link参数：
+-force_load $(PROJECT_DIR)/${path-to-libtorch.a}
+3，为target禁用bitcode，选择项目的Build Settings, 找到Enable Bitcode, 设置其值为No.
+总结
+在后续的文章中，Gemfield还将介绍iOS构建的PyTorch库的详细编译单元组成，在此基础上再介绍下自定义operator的编译，以达到减少静态库大小的目的（当然减幅不是很大）。
