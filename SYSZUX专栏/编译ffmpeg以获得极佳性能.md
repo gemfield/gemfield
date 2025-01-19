@@ -474,3 +474,17 @@ configure的时候添加 --extra-cflags="-march=native" 和 --enable-hardcoded-t
 ......
 ```
 测试效果：没有什么变化。
+
+# 网友评论
+Zuxy：
+```bash
+3DNow!/FMA4/XOP 等针对 AMD 的优化可以禁掉，生成的二进制文件会小一点。
+```
+gemfield:
+```bash
+默认的configure选项是 ./configure --disable-static --enable-shared --disable-doc --disable-optimizations --disable-mmx --enable-debug=3 --enable-gpl --enable-libx264 --disable-stripping --prefix=/opt/PyAV/vendor/build/ffmpeg-4.0，可以看到禁止掉了各种优化
+```
+wlgqa:
+```bash
+我用conda安装pyav，conda会自动安装ffmpeg，运行ffmpeg看到的编译选项是--disable-doc --disable-openssl --enable-shared --enable-static --extra-cflags='-Wall -g -m64 -pipe -O3 -march=x86-64 -fPIC' --extra-cxxflags='-Wall -g -m64 -pipe -O3 -march=x86-64 -fPIC' --extra-libs='-lpthread -lm -lz' --enable-zlib --enable-pic --enable-pthreads --enable-gpl --enable-version3 --enable-hardcoded-tables --enable-avresample --enable-libfreetype --enable-gnutls --enable-libx264 --enable-libopenh264
+```
