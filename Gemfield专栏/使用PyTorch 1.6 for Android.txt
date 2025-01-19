@@ -1,0 +1,413 @@
+背景
+随着PyTorch的版本演进到了1.6（开始写此文的时候1.7刚刚发布），PyTorch中caffe2部分的色彩越来越淡，这在移动端上体现出的变化也是非常明显的。以Android为例，PyTorch for Android库就是为了构建出适用于Android开发的AAR文件（libtorch + jni + aar），目的就是为Android应用提供PyTorch的Android API。
+
+本文将演示如何将一个resnet18的PyTorch模型运行在Android手机上。 要运行这个resnet18的模型到Android上，我们有3种方式：
+
+来自jcenter仓库的预编译的pytorch aar，请参考下面的章节：使用预编译的PyTorch for Android AAR；
+链接原生的lib库（如果使用了AAR，那也是把AAR中的头文件和库文件解压出来，然后使用C++的方式去链接），请参考https://github.com/pytorch/android-demo-app中的NativeApp，本文不再赘述；
+依赖本地的项目源码：
+localImplementation project(':pytorch_android')
+localImplementation project(':pytorch_android_torchvision')
+此外，本文还会说明如何从PyTorch源码来编译出Android的aar文件。
+
+使用预编译的PyTorch for Android AAR
+这种方式主要有以下步骤：
+
+1，项目添加AAR依赖
+
+在Android项目中的build.gradle文件中添加对PyTorch for Android库的依赖（maven的话类似，不再赘述）：
+
+repositories {
+    jcenter()
+}
+
+dependencies {
+    implementation 'org.pytorch:pytorch_android:1.6.0-SNAPSHOT'
+    implementation 'org.pytorch:pytorch_android_torchvision:1.6.0-SNAPSHOT'
+    ...
+}
+这些AAR是发布在jcenter中的。
+
+2，项目源码中import PyTorch jni封装的模块
+
+如下所示：
+
+import org.pytorch.IValue;
+import org.pytorch.Module;
+import org.pytorch.Tensor;
+import org.pytorch.torchvision.TensorImageUtils;
+3，项目源码中调用libtorch、pytorch jni 的API
+
+在源码中使用PyTorch for Android的API：
+
+#加载模型
+module = Module.load(assetFilePath(this, "model.pt"));
+...
+final Tensor inputTensor = TensorImageUtils.bitmapToFloat32Tensor(bitmap,TensorImageUtils.TORCHVISION_NORM_MEAN_RGB, TensorImageUtils.TORCHVISION_NORM_STD_RGB);
+final Tensor outputTensor = module.forward(IValue.from(inputTensor)).toTensor();
+最后，使用预编译AAR的这种方式的Android项目可以参考https://github.com/pytorch/android-demo-app中的：
+
+HelloWorldApp
+ImageSegmentation
+PyTorchDemoApp
+你可以看到，这些项目除了对pytorch的依赖外，还依赖Facebook的SoLoader（com.facebook.soloader:nativeloader:0.8.0）和fbjni（com.facebook.fbjni:fbjni-java-only:0.0.3）。SoLoader是facebook推出的一个So文件加载库，它封装了System.loadLibrary并且能够处理So文件的依赖；而fbjni是Facebook推出的一个JNI helpers库，简化了一个Android Java项目中的JNI实现。
+
+从源码编译PyTorch for Android的AAR
+1，安装依赖
+
+克隆PyTorch仓库
+git clone --recursive https://github.com/pytorch/pytorch
+cd pytorch
+如果已经克隆过，则最好进行下更新
+
+git submodule sync
+git submodule update --init --recursive
+Android SDK
+wget https://dl.google.com/android/repository/sdk-tools-linux-3859397.zip
+unzip sdk-tools-linux-3859397.zip -d android_sdk
+export ANDROID_HOME=$(pwd)/android_sdk
+Android NDK
+wget https://dl.google.com/android/repository/android-ndk-r19c-linux-x86_64.zip
+unzip android-ndk-r19c-linux-x86_64.zip
+export ANDROID_NDK=$(pwd)/android-ndk-r19c
+Gradle 4.10.3
+wget https://services.gradle.org/distributions/gradle-4.10.3-bin.zip
+unzip gradle-4.10.3-bin.zip
+export GRADLE_HOME=$(pwd)/gradle-4.10.3
+export PATH="${GRADLE_HOME}/bin/:${PATH}"
+JDK
+OpenCV SDK for Android
+参考：Gemfield：Linux上编译OpenCV的Android库。
+
+如果不显式指定ABI的话，则编译脚本会分别使用armeabi-v7a、arm64-v8a、x86、x86_64四种ABI各编译一次。
+
+2，初始化CMake的参数
+
+bash ./scripts/build_pytorch_android.sh
+shell脚本的目的就是为cmake提供合适的参数，最后执行cmake时候携带的参数如下：
+
+cmake \
+/app/gemfield/pytorch \
+-DCMAKE_INSTALL_PREFIX=/app/gemfield/pytorch/build_android_armeabi-v7a/install \
+-DCMAKE_BUILD_TYPE=Release \
+-DCMAKE_PREFIX_PATH=/usr/lib/python3/dist-packages \
+-DPYTHON_EXECUTABLE=/usr/bin/python \
+-DBUILD_CUSTOM_PROTOBUF=OFF \
+-DCMAKE_TOOLCHAIN_FILE=/app/gemfield/android-ndk-r19c/build/cmake/android.toolchain.cmake \
+-DBUILD_TEST=OFF \
+-DBUILD_BINARY=OFF \
+-DBUILD_MOBILE_BENCHMARK=0 \
+-DBUILD_MOBILE_TEST=0 \
+-DBUILD_PYTHON=OFF \
+-DBUILD_SHARED_LIBS=OFF \
+-DANDROID_TOOLCHAIN=clang \
+-DUSE_CUDA=OFF \
+-DUSE_GFLAGS=OFF \
+-DUSE_OPENCV=OFF \
+-DUSE_LMDB=OFF \
+-DUSE_LEVELDB=OFF \
+-DUSE_MPI=OFF \
+-DUSE_OPENMP=OFF \
+-DANDROID_NDK=/app/gemfield/android-ndk-r19c \
+-DANDROID_ABI=armeabi-v7a \
+-DANDROID_NATIVE_API_LEVEL=21 \
+-DANDROID_CPP_FEATURES=rtti exceptions
+上述的命令会被执行四次，每个ABI一次。可以看到，编译的工具链来自NDK。
+
+3，编译的模块
+
+third_party/eigen 生成 libeigen_blas.a；
+pthreadpool 生成 libpthreadpool.a；
+clog.c 生成 libclog.a；
+cpuinfo 生成 llibcpuinfo.a；
+QNNPACK 生成 libpytorch_qnnpack.a；
+NNPACK 生成 libnnpack.a；
+XNNPACK 生成 libXNNPACK.a；
+c10 生成 libc10.a；
+ATen、serialize、csrc（autograd、jit等）生成 libtorch_cpu.a；
+一个空的empty.cpp 生成 libtorch.a；
+根据上述步骤，每种ABI生成的静态库有：
+
+gemfield@ThinkPad-X1C:/app/gemfield/pytorch/build_android_arm64-v8a/lib$ ls | xargs -n1
+libc10.a
+libclog.a
+libcpuinfo.a
+libcpuinfo_internals.a
+libeigen_blas.a
+libfmt.a
+libnnpack.a
+libnnpack_reference_layers.a
+libpthreadpool.a
+libpytorch_qnnpack.a
+libtorch.a
+libtorch_cpu.a
+libXNNPACK.a
+每个库的编译一般都会经历3步：
+
+从C++源文件编译出.o文件；
+合并多个.o文件成为一个.a文件；
+使用arm-linux-androideabi-ranlib生成index来加速访问.a库；
+4，使用PyTorch的编译输出
+
+编译脚本会自动将生成的库和头文件的目录做个软链接到pytorch android目录下：
+
+ln -s /app/gemfield/pytorch/build_android_x86_64/install/lib /app/gemfield/pytorch/android/pytorch_android/src/main/jniLibs/x86_64
+ln -s /app/gemfield/pytorch/build_android_x86_64/install/include /app/gemfield/pytorch/android/pytorch_android/src/main/cpp/libtorch_include/x86_64
+最后所有的ABI都链接完成后，如下所示：
+
+gemfield@ThinkPad-X1C:/app/gemfield/pytorch/android/pytorch_android/src/main/cpp$ ls -l libtorch_include/
+总用量 8
+lrwxrwxrwx 1 gemfield gemfield 61 11月 20 13:02 arm64-v8a -> /app/gemfield/pytorch/build_android_arm64-v8a/install/include
+lrwxrwxrwx 1 gemfield gemfield 63 11月 20 12:05 armeabi-v7a -> /app/gemfield/pytorch/build_android_armeabi-v7a/install/include
+lrwxrwxrwx 1 gemfield gemfield 55 11月 20 13:57 x86 -> /app/gemfield/pytorch/build_android_x86/install/include
+lrwxrwxrwx 1 gemfield gemfield 58 11月 20 14:57 x86_64 -> /app/gemfield/pytorch/build_android_x86_64/install/include
+
+gemfield@ThinkPad-X1C:/app/gemfield/pytorch/android/pytorch_android/src/main/jniLibs$ ls -l
+总用量 0
+lrwxrwxrwx 1 gemfield gemfield 57 11月 20 13:02 arm64-v8a -> /app/gemfield/pytorch/build_android_arm64-v8a/install/lib
+lrwxrwxrwx 1 gemfield gemfield 59 11月 20 12:05 armeabi-v7a -> /app/gemfield/pytorch/build_android_armeabi-v7a/install/lib
+lrwxrwxrwx 1 gemfield gemfield 51 11月 20 13:57 x86 -> /app/gemfield/pytorch/build_android_x86/install/lib
+lrwxrwxrwx 1 gemfield gemfield 54 11月 20 14:57 x86_64 -> /app/gemfield/pytorch/build_android_x86_64/install/lib
+5，生成aar文件
+
+编译脚本在最后会自动调用gradle来生成aar文件（你也可以手工执行）：
+
+gradle -p /app/gemfield/pytorch/android clean assembleRelease
+这一步我们需要先编译出libfbjni.so和libpytorch_jni.so，输入是前述编译好的libtorch的头文件和静态库，以及这个步骤中的pytorch_jni_jit.cpp、pytorch_jni_common.cpp。在pytorch_android/CMakeLists.txt中你能清楚的看到这一点：
+
+file(GLOB pytorch_android_SOURCES
+  ${pytorch_android_DIR}/pytorch_jni_jit.cpp
+  ${pytorch_android_DIR}/pytorch_jni_common.cpp
+  ${pytorch_android_DIR}/pytorch_jni_common.h
+)
+
+add_library(pytorch_jni SHARED
+    ${pytorch_android_SOURCES}
+)
+
+  set(pytorch_jni_LIBS
+      fbjni
+      -Wl,--gc-sections
+      -Wl,--whole-archive
+      libtorch
+      libtorch_cpu
+      -Wl,--no-whole-archive
+      libc10
+      libnnpack
+      libXNNPACK
+      libpytorch_qnnpack
+      libpthreadpool
+      libeigen_blas
+      libcpuinfo
+      libclog
+  )
+
+target_link_libraries(pytorch_jni ${pytorch_jni_LIBS})
+其中编译libfbjni.so 如下：
+
+/app/gemfield/android_sdk/cmake/3.6.4111459/bin/cmake --build /app/gemfield/pytorch/android/pytorch_android/.externalNativeBuild/cmake/release/arm64-v8a --target fbjni
+Successfully started process 'command '/app/gemfield/android_sdk/cmake/3.6.4111459/bin/cmake''
+[1/15] Building CXX object fbjni/arm64-v8a/CMakeFiles/fbjni.dir/cxx/fbjni/OnLoad.cpp.o
+[2/15] Building CXX object fbjni/arm64-v8a/CMakeFiles/fbjni.dir/cxx/fbjni/ReadableByteChannel.cpp.o
+[3/15] Building CXX object fbjni/arm64-v8a/CMakeFiles/fbjni.dir/cxx/fbjni/ByteBuffer.cpp.o
+[4/15] Building CXX object fbjni/arm64-v8a/CMakeFiles/fbjni.dir/cxx/fbjni/fbjni.cpp.o
+[5/15] Building CXX object fbjni/arm64-v8a/CMakeFiles/fbjni.dir/cxx/fbjni/detail/Environment.cpp.o
+[6/15] Building CXX object fbjni/arm64-v8a/CMakeFiles/fbjni.dir/cxx/fbjni/detail/Exceptions.cpp.o
+[7/15] Building CXX object fbjni/arm64-v8a/CMakeFiles/fbjni.dir/cxx/fbjni/detail/Hybrid.cpp.o
+[8/15] Building CXX object fbjni/arm64-v8a/CMakeFiles/fbjni.dir/cxx/fbjni/detail/Meta.cpp.o
+[9/15] Building CXX object fbjni/arm64-v8a/CMakeFiles/fbjni.dir/cxx/fbjni/detail/References.cpp.o
+[10/15] Building CXX object fbjni/arm64-v8a/CMakeFiles/fbjni.dir/cxx/fbjni/detail/utf8.cpp.o
+[11/15] Building CXX object fbjni/arm64-v8a/CMakeFiles/fbjni.dir/cxx/lyra/lyra_breakpad.cpp.o
+[12/15] Building CXX object fbjni/arm64-v8a/CMakeFiles/fbjni.dir/cxx/lyra/lyra_exceptions.cpp.o
+[13/15] Building CXX object fbjni/arm64-v8a/CMakeFiles/fbjni.dir/cxx/lyra/cxa_throw.cpp.o
+[14/15] Building CXX object fbjni/arm64-v8a/CMakeFiles/fbjni.dir/cxx/lyra/lyra.cpp.o
+[15/15] Linking CXX shared library ../../../../build/intermediates/cmake/release/obj/arm64-v8a/libfbjni.so
+编译libpytorch_jni.so如下：
+
+/app/gemfield/pytorch/android/pytorch_android Command: /app/gemfield/android_sdk/cmake/3.6.4111459/bin/cmake --build /app/gemfield/pytorch/android/pytorch_android/.externalNativeBuild/cmake/release/arm64-v8a --target pytorch_jni
+[1/3] Building CXX object CMakeFiles/pytorch_jni.dir/src/main/cpp/pytorch_jni_common.cpp.o
+[2/3] Building CXX object CMakeFiles/pytorch_jni.dir/src/main/cpp/pytorch_jni_jit.cpp.o
+[3/3] Linking CXX shared library ../../../../build/intermediates/cmake/release/obj/arm64-v8a/libpytorch_jni.so
+编译libpytorch_vision_jni.so：
+
+/app/gemfield/android_sdk/cmake/3.6.4111459/bin/cmake --build /app/gemfield/pytorch/android/pytorch_android_torchvision/.externalNativeBuild/cmake/release/x86_64 --target pytorch_vision_jni
+Successfully started process 'command '/app/gemfield/android_sdk/cmake/3.6.4111459/bin/cmake''
+[1/2] Building CXX object CMakeFiles/pytorch_vision_jni.dir/src/main/cpp/pytorch_vision_jni.cpp.o
+[2/2] Linking CXX shared library ../../../../build/intermediates/cmake/release/obj/x86_64/libpytorch_vision_jni.so
+生成aar：
+
+[ant:zip] Building zip: /app/gemfield/pytorch/android/pytorch_android/build/outputs/aar/pytorch_android-release.aar
+最后，aar文件会生成在如下目录：
+
+gemfield@ThinkPad-X1C:/app/gemfield/pytorch$ find /app/gemfield/pytorch/android -type f -name *aar -exec ls -lh {} \+
+-rw-rw-r-- 1 gemfield gemfield 47M 11月 20 15:29 /app/gemfield/pytorch/android/pytorch_android/build/outputs/aar/pytorch_android-release.aar
+-rw-rw-r-- 1 gemfield gemfield 36K 11月 20 15:29 /app/gemfield/pytorch/android/pytorch_android_torchvision/build/outputs/aar/pytorch_android_torchvision-release.aar
+AAR文件实际上就是个zip压缩包，使用unzip命令解压上述的pytorch_android-release.aar文件，就会得到如下的内容：
+
+./R.txt
+./res/values/values.xml
+./AndroidManifest.xml
+./classes.jar
+./jni/arm64-v8a/libfbjni.so
+./jni/arm64-v8a/libpytorch_jni.so
+./jni/arm64-v8a/libc++_shared.so
+./jni/x86_64/libfbjni.so
+./jni/x86_64/libpytorch_jni.so
+./jni/x86_64/libc++_shared.so
+./jni/armeabi-v7a/libfbjni.so
+./jni/armeabi-v7a/libpytorch_jni.so
+./jni/armeabi-v7a/libc++_shared.so
+./jni/x86/libfbjni.so
+./jni/x86/libpytorch_jni.so
+./jni/x86/libc++_shared.so
+而aar中的动态库的运行时依赖，以libpytorch_jni.so库为例，其运行时依赖有：
+
+gemfield@ThinkPad-X1C:~$ /app/gemfield/android-ndk-r19c/toolchains/llvm/prebuilt/linux-x86_64/arm-linux-androideabi/bin/readelf -a ./jni/arm64-v8a/libpytorch_jni.so | grep "Shared library:"
+ 0x0000000000000001 (NEEDED)             Shared library: [libfbjni.so]
+ 0x0000000000000001 (NEEDED)             Shared library: [libandroid.so]
+ 0x0000000000000001 (NEEDED)             Shared library: [liblog.so]
+ 0x0000000000000001 (NEEDED)             Shared library: [libm.so]
+ 0x0000000000000001 (NEEDED)             Shared library: [libc++_shared.so]
+ 0x0000000000000001 (NEEDED)             Shared library: [libdl.so]
+ 0x0000000000000001 (NEEDED)             Shared library: [libc.so]
+除了libfbjni.so、libc++_shared.so外都是Android系统库，你并不需要打包到apk中。
+
+多说一点，这一步你可能会遇到如下的错误：
+
+gemfield@ThinkPad-X1C:/app/gemfield/pytorch$ gradle -p /app/gemfield/pytorch/android clean assembleRelease
+
+> Configure project :pytorch_android
+Checking the license for package Android SDK Build-Tools 28.0.3 in /app/gemfield/android_sdk/licenses
+Warning: License for package Android SDK Build-Tools 28.0.3 not accepted.
+Checking the license for package Android SDK Platform 28 in /app/gemfield/android_sdk/licenses
+Warning: License for package Android SDK Platform 28 not accepted.
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+A problem occurred configuring project ':pytorch_android'.
+> Failed to notify project evaluation listener.
+   > Failed to install the following Android SDK packages as some licences have not been accepted.
+        build-tools;28.0.3 Android SDK Build-Tools 28.0.3
+        platforms;android-28 Android SDK Platform 28
+     To build this project, accept the SDK license agreements and install the missing components using the Android Studio SDK Manager.
+     Alternatively, to transfer the license agreements from one workstation to another, see http://d.android.com/r/studio-ui/export-licenses.html
+     
+     Using Android SDK: /app/gemfield/android_sdk
+   > Could not get unknown property 'assembleDebug' for project ':pytorch_android' of type org.gradle.api.Project.
+这是因为你没有接受SDK的使用条款。在Linux上，你可以使用如下的命令来接受条款：
+
+yes | /app/gemfield/android_sdk/tools/bin/sdkmanager --licenses
+如果是初次下载Android SDK， 那么这一步中还会下载安装：
+
+SDK Platforms
+Build-tools
+CMake
+NDK
+SDK Platform-tools
+SDK tools
+SDK Patch Applier
+至此，你已经拥有了pytorch for android的aar文件了。下面开始编译pytorch项目中提供的test_app测试项目，test_app会编译出3个apk，分别使用了3个不同的torch模型。
+
+编译并安装APK
+在PyTorch仓库的android/test_app目录下提供了一个用于测试的android小项目，我们可以使用它来生成测试apk。这个test_app默认是使用本地的依赖来编译的：在项目root目录下的settings.gradle中指定了：
+
+include ':app', ':pytorch_android', ':pytorch_android_torchvision', ':pytorch_host', ':test_app'
+project(':pytorch_android_torchvision').projectDir = file('pytorch_android_torchvision')
+project(':pytorch_host').projectDir = file('pytorch_android/host')
+project(':test_app').projectDir = file('test_app/app')
+并在test_app的build.gradle中指定了：
+
+localImplementation project(':pytorch_android')
+localImplementation project(':pytorch_android_torchvision')
+也就是编译脚本将寻找一个包含了build.gradle文件的pytorch_android、pytorch_android_torchvision目录。在开始之前，你需要先执行如下命令来生成用于libtorch的神经网络模型：
+
+gemfield@ThinkPad-X1C:/app/gemfield/pytorch/android/test_app$ python make_assets.py 
+执行成功后，会在android/test_app/app/src/main/assets目录下生成trace好的网络模型：
+
+gemfield@ThinkPad-X1C:/app/gemfield/pytorch/android/test_app/app/src/main/assets$ ls -l
+total 149932
+-rw-rw-r-- 1 gemfield gemfield   3900014 Nov 20 20:34 mobilenet2q.pt
+-rw-rw-r-- 1 gemfield gemfield  46907787 Nov 20 20:34 resnet18.pt
+-rw-rw-r-- 1 gemfield gemfield 102713159 Nov 20 20:34 resnet50.pt
+然后使用gradle编译该项目，输出apk文件。开始安装之前，我们先确认下环境变量：
+
+gemfield@ThinkPad-X1C:/app/gemfield/pytorch$ env | grep -i android
+ANDROID_NDK=/app/gemfield/android-ndk-r19c
+ANDROID_HOME=/app/gemfield/android_sdk
+PATH=/app/gemfield/gradle-4.10.3/bin/:/app/gemfield/android_sdk/platform-tools/:/app/gemfield/android_sdk/build-tools/28.0.3/:/home/gemfield/Android/Sdk/platform-tools/:......
+然后开始编译test_app：
+
+gemfield@ThinkPad-X1C:/app/gemfield/pytorch/android/test_app/app$ gradle --info assembleRelease
+编译成功后会输出apk文件。当开始安装的时候，你可能会遇到apk签名的问题：
+
+gemfield@ThinkPad-X1C:/app/gemfield/pytorch$ adb install -r android/test_app/app/build/outputs/apk/resnet18LocalBase/release/test_app-resnet18-local-base-release-unsigned.apk
+Performing Streamed Install
+adb: failed to install android/test_app/app/build/outputs/apk/resnet18LocalBase/release/test_app-resnet18-local-base-release-unsigned.apk: Failure [INSTALL_PARSE_FAILED_NO_CERTIFICATES: Package /data/app/vmdl935195464.tmp/base.apk has no certificates at entry AndroidManifest.xml]
+要解决这个问题，你可以从命令行为该apk签名（对于 APK，使用 apksigner；对于 app bundle，使用 jarsigner），或在构建期间配置 Gradle 来为应用进行签名。无论使用哪种方式，都需要先使用 keytool 生成一个私钥，如下所示：
+
+gemfield@ThinkPad-X1C:/app/gemfield/pytorch$ keytool -genkey -v -keystore gemfield-release-key.jks -keyalg RSA -keysize 2048 -validity 10000 -alias my-alias
+输入密钥库口令:  
+再次输入新口令: 
+您的名字与姓氏是什么?
+  [Unknown]:  Gemfield
+您的组织单位名称是什么?
+  [Unknown]:  CivilNet
+您的组织名称是什么?
+  [Unknown]:  CivilNet
+您所在的城市或区域名称是什么?
+  [Unknown]:  Beijing
+您所在的省/市/自治区名称是什么?
+  [Unknown]:  Beijing
+该单位的双字母国家/地区代码是什么?
+  [Unknown]:  CN
+CN=Gemfield, OU=CivilNet, O=CivilNet, L=Beijing, ST=Beijing, C=CN是否正确?
+  [否]:  y
+
+正在为以下对象生成 2,048 位RSA密钥对和自签名证书 (SHA256withRSA) (有效期为 10,000 天):
+         CN=Gemfield, OU=CivilNet, O=CivilNet, L=Beijing, ST=Beijing, C=CN
+输入 <my-alias> 的密钥口令
+        (如果和密钥库口令相同, 按回车):  
+[正在存储gemfield-release-key.jks]
+好了，我们继续。首先将刚才编译生成的apk重新命名以方便后面的命令行使用：
+
+gemfield@ThinkPad-X1C:/app/gemfield/pytorch$ mv android/test_app/app/build/outputs/apk/resnet18LocalBase/release/test_app-resnet18-local-base-release-unsigned.apk gemfield.apk
+然后align apk（节省内存）：
+
+gemfield@ThinkPad-X1C:/app/gemfield/pytorch$ zipalign -v -p 4 gemfield.apk gemfield1.apk
+然后使用apksigner：
+
+gemfield@ThinkPad-X1C:/app/gemfield/pytorch$ apksigner sign --ks gemfield-release-key.jks --out gemfield2.apk gemfield1.apk
+然后再安装：
+
+adb install -r gemfield2.apk
+运行程序，使用adb logcat会显示日志。如果日志中出现如下的错误：
+
+gemfield@ThinkPad-X1C:/app/gemfield/pytorch$ adb logcat | grep "AndroidRuntime"
+11-20 20:29:29.876 11809 11830 E AndroidRuntime: FATAL EXCEPTION: pytorch-resnet18_bg
+11-20 20:29:29.876 11809 11830 E AndroidRuntime: Process: org.pytorch.testapp.resnet18, PID: 11809
+11-20 20:29:29.876 11809 11830 E AndroidRuntime: java.lang.IllegalArgumentException: Failed to open asset 'resnet18.pt'
+11-20 20:29:29.876 11809 11830 E AndroidRuntime:        at org.pytorch.NativePeer.initHybridAndroidAsset(Native Method)
+11-20 20:29:29.876 11809 11830 E AndroidRuntime:        at org.pytorch.NativePeer.<init>(NativePeer.java:32)
+11-20 20:29:29.876 11809 11830 E AndroidRuntime:        at org.pytorch.PyTorchAndroid.loadModuleFromAsset(PyTorchAndroid.java:31)
+11-20 20:29:29.876 11809 11830 E AndroidRuntime:        at org.pytorch.testapp.MainActivity.doModuleForward(MainActivity.java:134)
+11-20 20:29:29.876 11809 11830 E AndroidRuntime:        at org.pytorch.testapp.MainActivity$1.run(MainActivity.java:44)
+11-20 20:29:29.876 11809 11830 E AndroidRuntime:        at android.os.Handler.handleCallback(Handler.java:808)
+11-20 20:29:29.876 11809 11830 E AndroidRuntime:        at android.os.Handler.dispatchMessage(Handler.java:101)
+11-20 20:29:29.876 11809 11830 E AndroidRuntime:        at android.os.Looper.loop(Looper.java:166)
+11-20 20:29:29.876 11809 11830 E AndroidRuntime:        at android.os.HandlerThread.run(HandlerThread.java:65)
+11-20 20:29:29.884  1128  6781 W ActivityManager:   Force finishing activity org.pytorch.testapp.resnet18/org.pytorch.testapp.MainActivity
+11-20 20:29:29.890  1128  6092 D WindowManager: finishDrawingWindow: Window{38f5cca u0 org.pytorch.testapp.resnet18/org.pytorch.testapp.MainActivity} mDrawState=DRAW_PENDING
+则是因为前述的make assets.py没有执行成功。
+
+APK性能测试结果
+在将包含有resnet18和mobilenet模型的apk分别安装到如下手机后，Gemfield在其上分别测试了resnet18和量化版MobileNet V2模型的推理速度，结果如下所示：
+
+
+手机	处理器	resnet18推理时间	量化版mobilenet v2推理时间
+华为P9	麒麟955	700ms	55ms
+华为Mate 30 pro	麒麟990	190ms	38ms
+小米Mix 2s	骁龙845	339ms	57ms
+小米10	骁龙865	130ms	44ms
+Oppo R17	骁龙670	395ms	63ms + 1ms
+iPhone 12	A14	本文说的Android，关我啥事	本文说的Android，关我啥事
