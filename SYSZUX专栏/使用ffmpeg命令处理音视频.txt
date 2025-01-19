@@ -1,0 +1,140 @@
+FFmpeg可以运行音频和视频多种格式的录影、转换、流功能，包含了libavcodec（用于多个项目中音频和视频的解码器库）和libavformat（音频与视频格式转换库）。(关于一些底层方面的东西，可以参考ffmpeg和H264视频的编解码）
+
+1，获得一个文件的音视频（编码方面的）信息：
+
+gemfield@ai:~$ ffmpeg -i video.flv -hide_banner
+
+
+2，把视频的每帧转换成照片：
+
+gemfield@ai:~$ ffmpeg -i video.flv image%d.jpg
+
+
+把视频的一部分截取出来：
+
+ffmpeg -i civilnet.MP4 -ss 2000 -t 100 -codec copy gemfield.mp4
+
+
+把视频的一部分截取出来生成图片：
+
+ffmpeg -ss 06:07:19 -i civilnet.mp4 -t 719 gemfield%6d.jpg
+
+
+3，把照片(image1.jpg, image2.jpg, image3.jpg...)转换为视频，-f设置输出格式：
+
+gemfield@ai:~$ ffmpeg -f image2 -i image%d.jpg video.mpg
+
+
+4，把音频剥离出来：
+
+gemfield@ai:~$ ffmpeg -i video.flv -vn -ar 44100 -ac 2 -ab 192 -f mp3 audio.mp3
+
+
+5，把多个视频合并为1个视频：
+
+gemfield@ai:~$ for f in $(ls *.mkv);do echo "file '$f'" >> mylist.txt;done
+gemfield@ai:~$ ffmpeg -f concat -i mylist.txt -c copy myvideo.mkv
+
+
+6，视频格式的转换，比如把mp4格式转换为wmv：
+
+#先看格式是否被支持
+gemfield@ai:~$ ffmpeg -formats
+#转换
+gemfield@ai:~$ ffmpeg -i yourvideoname.mp4 -c:v libx264 outputfilename.wmv
+
+
+7，把字幕烧写到视频里（注意是烧写到视频里，而不是运行时加载字幕的方式）
+
+#先准备好字幕文件 game.srt
+gemfield@ai:~$ ffmpeg -i game.srt game.ass
+gemfield@ai:~$ ffmpeg -i myvideo.mkv -vf ass=game.ass myvideo_game_caption.mkv
+
+
+备注：字幕文件的基本格式
+
+gemfield@ai:~/Downloads/demo_gemfield$ cat game.srt
+1
+00:00:00,000 --> 00:00:27,000 
+第一部分：这里是Gemfield
+
+2
+00:00:27,000 --> 00:01:10,000
+第二部分：那里也是Gemfield
+
+3
+00:01:10,000 --> 00:02:21,000 
+第三部分：到处都是Gemfield
+
+4
+00:02:21,000 --> 00:03:45,000
+第四部分：但你不是Gemfield
+
+5
+00:03:45,000 --> 00:04:42,000
+第五部分：他也不是Gemfield
+
+6
+00:04:42,000 --> 00:04:52,000
+第六部分：那天下谁人不识Gemfield
+
+
+8，把视频切割成多个
+
+gemfield@ai:~$ ffmpeg -i 10.mkv -t 00:00:39 -codec copy 8.mkv -ss 00:01:01 -codec copy 9.mkv
+
+
+10，一些更新
+
+#mp4拼接：
+ffmpeg -i 1.mp4 -vcodec copy -acodec copy -vbsf h264_mp4toannexb 1.ts
+ffmpeg -i 2.mp4 -vcodec copy -acodec copy -vbsf h264_mp4toannexb 2.ts
+ffmpeg -i "concat:1.ts|2.ts" -acodec copy -vcodec copy -absf aac_adtstoasc output.mp4
+
+#mp3截取：
+ffmpeg -ss 00:00:05 -t 00:02:00 -i testmusic.mp3 twomin.mp3
+
+#mp4配mp3音频：
+ffmpeg -i test_yueqianlongma.mp4 -vcodec copy -an output.mp4
+#(cut off original audio for original mp4)
+ffmpeg -i output.mp4 -i audio.mp3 -vcodec copy -acodec copy result.mp4
+
+#mp4截帧：
+ffmpeg -i video.mp4 image%4d.jpg
+
+#单图生成一段视频：
+ffmpeg -f concat -safe 0 -i input.txt concat1.mp4
+#input.txt内容（去掉#）：
+#file './frames/image0101.jpg'
+#duration 3 (单位秒）
+#file './frames/image0101.jpg'
+
+#截取中间一段视频(-ss 起始时间点 -to 结束时间点)：
+ffmpeg  -i source.mp4 -vcodec copy -acodec copy -ss 00:00:10 -to 00:00:15 ./cutout1.mp4
+
+
+Debug章节
+参考Debug/MacroblocksAndMotionVectors - FFmpeg
+
+1，显示运动向量
+
+ffplay -flags2 +export_mvs input.mp4 -vf codecview=mv=pf+bf+bb
+或者
+ffmpeg -flags2 +export_mvs -i input.mp4 -vf codecview=mv=pf+bf+bb output.mp4
+其中：
+
+pf – forward predicted motion vectors of P pictures
+bf – forward predicted motion vectors of B pictures
+bb – backward predicted motion vectors of B pictures
+
+
+2，显示宏块类型
+
+ffplay -debug vis_mb_type input.mp4
+ffmpeg -debug vis_mb_type -i input.mp4 output.mp4
+
+
+3，分析QP Values
+
+ffplay -debug vis_qp input.mp4
+ffmpeg  -debug vis_qp -i input.mp4 output.mp4
