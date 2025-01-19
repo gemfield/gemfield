@@ -138,3 +138,9 @@ ffmpeg -debug vis_mb_type -i input.mp4 output.mp4
 
 ffplay -debug vis_qp input.mp4
 ffmpeg  -debug vis_qp -i input.mp4 output.mp4
+
+____________
+把rtmp流dump为mp4：ffmpeg -i rtmp://live.gemfield.org/live/2001 -acodec copy -vcodec copy 2001.mp4
+把AAC音频剥离出来：ffmpeg -i INPUT.mp4 -c copy -map 0:a:0 Output.aac
+
+
