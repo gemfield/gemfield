@@ -1,0 +1,331 @@
+背景
+Apple官方虽然不支持pytorch到coreml的直接转换。然而借助苹果的coremltools、pytorch的onnx、社区的onnx到coreml的转换工具这三大力量，这个转换过程还是很容易的。
+
+本文以PyTorch 1.4为基础，以。将PyTorch模型转换为CoreML模型分为如下5个基本步骤：
+
+使用PyTorch训练并保存一个模型（并对save的模型进行测试）；
+PyTorch模型转换为ONNX模型；
+ONNX模型转换为CoreML模型；
+在macOS上使用python脚本验证该模型；
+集成到XCode上然后在iOS上验证该模型。
+下面分步骤介绍下。
+
+使用PyTorch训练并保存一个模型
+这是PyTorch的基础了，在此不予赘述。你可以参考专栏文章：
+
+Gemfield：详解Pytorch中的网络构造
+783 赞同 · 20 评论文章
+
+PyTorch模型转换为ONNX模型
+使用PyTorch中的onnx模块的export方法：
+
+# -*- coding:utf-8 -*-
+import torch
+#使用了MobileNet网络
+from model import MobileNet
+model = MobileNet(83)
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+#加载权重参数到device上
+model.load_state_dict(torch.load("./pth/mobilenet.pth", map_location=device))
+model.eval()
+
+#伪造一个输入
+dummy_input = torch.rand(1, 3, 224, 224)
+
+#定义网络输入输出的名字
+input_names = ["gemfield_in"]
+output_names = ["gemfield_out"]
+
+#使用pytorch的onnx模块来进行转换
+torch.onnx.export(model,
+                  dummy_input,
+                  "syszux_scene.onnx",
+                  verbose=True,
+                  input_names=input_names,
+                  output_names=output_names)
+执行成功，输出syszux_scene.onnx模型。你可以使用Netron软件打开onnx模型来看它的网络结构（是不是预期中的）。
+
+如果你手头没有自己的网络，则可以使用torchvision提供的mobilenet v2来试验下：
+
+import torch
+import torch.nn as nn
+import torchvision
+
+model = torchvision.models.mobilenet_v2(pretrained=True)
+
+# torchvision的models中没有softmax层，我们添加一个
+model = nn.Sequential(model, nn.Softmax())
+
+dummy_input = torch.randn(1, 3, 224, 224)
+torch.onnx.export(model, dummy_input, 'mobilenet_v2.onnx', verbose=True,
+                  input_names=['image'], output_names=['gemfield_out'])
+执行成功，输出mobilenet_v2.onnx模型。
+
+转换为onnx模型后，可以使用onnx进行推理测试，以确保从pytorch转换到onnx的正确性：
+
+import cv2
+import onnxruntime
+import numpy as np
+import sys
+import torch
+
+from PIL import Image
+from torchvision import transforms
+
+session = onnxruntime.InferenceSession("../syszux_scene.onnx")
+input_name = session.get_inputs()[0].name
+output_name = session.get_outputs()[0].name
+input_shape = session.get_inputs()[0].shape
+
+trans = transforms.Compose([
+                     transforms.Resize((224, 224)),
+                     transforms.ToTensor(),
+                     transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+                  ])
+#使用Pillow的Image来打开图片
+image = Image.open(sys.argv[1])
+img1 = trans(image).unsqueeze(0).numpy()
+res = session.run([output_name], {input_name: img1})
+print(res)
+你也可以使用opencv来代替Pillow的Image来读取图片，并且使用numpy来代替pytorch的transform进行normalize计算，如下所示：
+
+import cv2
+import onnxruntime
+import numpy as np
+import sys
+import torch
+
+from PIL import Image
+from torchvision import transforms
+
+session = onnxruntime.InferenceSession("../syszux_scene.onnx")
+input_name = session.get_inputs()[0].name
+output_name = session.get_outputs()[0].name
+input_shape = session.get_inputs()[0].shape
+print("gemfield debug required input shape", input_shape)
+
+img = cv2.imread(sys.argv[1])
+img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+#INTER_NEAREST, INTER_LINEAR, INTER_AREA, INTER_CUBIC
+img = cv2.resize(img, (224, 224),interpolation = cv2.INTER_LINEAR)
+
+img = img.astype(np.float32) / 255.0
+
+mean = np.array([0.485, 0.456, 0.406])
+val = np.array([0.229, 0.224, 0.225])
+img = (img - mean) / val
+print(img)
+
+print("gemfield debug img shape1: ",img.shape)
+img= img.astype(np.float32)
+img = img.transpose((2,0,1))
+#img = img.transpose((2,1,0))
+print("gemfield debug img shape2: ",img.shape)
+img = np.expand_dims(img,axis=0)
+print("gemfield debug img shape3: ",img.shape)
+
+res = session.run([output_name], {input_name: img})
+print(res)
+ONNX模型转换为CoreML模型
+借助下面的开源社区的项目，可以将syszux_scene.onnx转换为苹果的CoreML模型：syszux_scene.mlmodel。
+
+onnx/onnx-coreml
+​github.com/onnx/onnx-coreml
+
+1，安装依赖
+
+pip install --upgrade onnx-coreml
+
+#安装上面的onnx-coreml的时候会自动安装coremltools
+pip install --upgrade coremltools
+2，转换成mlmodel
+
+from onnx_coreml import convert
+
+# Load the ONNX model as a CoreML model
+model = convert(model='syszux_scene.onnx',minimum_ios_deployment_target='13')
+
+# Save the CoreML model
+model.save('syszux_scene.mlmodel')
+这里面主要用到的就是convert函数。这个函数提供了相当多的参数，在这个例子中提供了其它参数使用的范例：
+
+https://github.com/CivilNet/Gemfield/blob/master/src/python/coreml/onnx2coreml.py
+​github.com/CivilNet/Gemfield/blob/master/src/python/coreml/onnx2coreml.py
+注意这里的参数：minimum_ios_deployment_target='13'，指定了该CoreML模型只能运行在iOS 13上，否则XCode就会给出如下告警：
+
+'mobilenet_v2' is only available on iOS 13.0 or newer
+'mobilenet_v2Input' is only available on iOS 13.0 or newer
+如果在上面使用的是torchvision提供的mobilenet v2，则这里使用同样的脚本来进行coreml的转换：
+
+import json
+import requests
+from onnx_coreml import convert
+
+IMAGENET_CLASS_INDEX_URL = 'https://s3.amazonaws.com/deep-learning-models/image-models/imagenet_class_index.json'
+
+def load_imagenet_class_labels():
+    response = requests.get(IMAGENET_CLASS_INDEX_URL)
+    index_json = response.json()
+    class_labels = [index_json[str(i)][1] for i in range(1000)]
+    return class_labels
+
+class_labels = load_imagenet_class_labels()
+model_coreml = convert(model="mobilenet_v2.onnx", mode='classifier', image_input_names=['image'],class_labels=class_labels, predicted_feature_name='classLabel',minimum_ios_deployment_target='13')
+model_coreml.save('mobilenet_v2.mlmodel')
+这个转换过程不会总是一帆风顺，事实上，除了几个经典的网络，或者极其简单的网络外，一般都会有各种各样的问题，这是不同软件生态之间磨合必然的代价。
+
+在macOS上使用Python脚本验证CoreML模型
+1，查看网络结构
+
+使用Netron软件可以直接打开CoreML模型来查看网络结构和参数，除此之外，还可以使用下面的代码来查看.mlmodel模型文件网络结构(该代码可以运行在Linux/Mac/Win上）：
+
+import sys
+import coremltools
+from coremltools.models.neural_network import flexible_shape_utils
+spec = coremltools.utils.load_spec('syszux_scene.mlmodel')
+print(spec)
+2，直接在macOS上使用CoreML模型进行推理测试
+
+使用下面的代码可以在手机之外debug CoreML模型（该代码只能运行在Mac OS上）：
+
+from PIL import Image
+import coremltools
+import numpy as np
+mlmodel = coremltools.models.MLModel('gemfield.mlmodel')
+pil_img = Image.open('civilnet.jpg')
+pil_img = pil_img.resize((768,1280))
+
+#forward
+out = mlmodel.predict({'gemfield': pil_img})
+
+#visualize the model output
+b = np.argmax(out['gemfieldout'],0)
+im = np.where(b==1,255,0)
+im = im.astype(np.uint8)
+im=Image.fromarray(im)
+im.show()
+如果遇到错误：Required input feature not passed to neural network，则是因为输入输出的名字不匹配。
+
+要想在Mac OS上执行上面的脚本，需要安装如下依赖：
+
+sudo easy_install pip
+pip install --user pillow
+pip install --user coremltools
+集成到XCode上然后在iOS上验证该模型
+有了mlmodel文件后，便可将其加入到xcode工程中，最终将算法部署到iOS上。这个时候你需要一位熟练的iOS开发者。注意：如果你使用了vision框架配合CoreML处理图片的输入，切记VNCoreMLRequest这个类的实例上的imageCropAndScaleOption属性，因为默认的值会导致vision从中间将你的输入图片crop为正方形。 你可以更改该属性的值来改变这个状况：
+
+request.imageCropAndScaleOption = .scaleFill
+CoreML模型的输入
+CoreML模型期待的输入是什么格式的图像呢？我们从3个方面来说：
+
+1，RGB或者BGR？大多数模型训练的时候使用的是RGB像素顺序，而Caffe使用的是BGR。如果你的神经网络框架使用的是OpenCV来加载图像（又没有做其它处理的话），那么大概率使用的也是BGR像素顺序。
+
+2，是否归一化？0～255还是0～1？
+
+3，是否进行normalization？适用normalized = (data - mean) / std 对每个像素进行计算？
+
+另外，有些模型自带layer用来进行图像的预处理，这个不在Gemfield本文的讨论范围之内，需要你仔细检查。
+
+在iOS SDK中，CoreML模型期待的输入就是CVPixelBufferRef，CVPixelBuffer通常包含的像素是ARGB或者BGRA 格式，每个通道是8bits where each color channel ，值为0～255。比如在由mobilenet_v3.mlmodel生成出来的头文件中，你可以看到如下的代码：
+
+@interface mobilenet_v3Input : NSObject<MLFeatureProvider>
+
+/// image as color (kCVPixelFormatType_32BGRA) image buffer, 224 pixels wide by 224 pixels high
+@property (readwrite, nonatomic) CVPixelBufferRef image;
+- (instancetype)init NS_UNAVAILABLE;
+- (instancetype)initWithImage:(CVPixelBufferRef)image;
+@end
+因此这里的问题就变成了——CoreML输入的CVPixelBufferRef究竟是kCVPixelFormatType_32BGRA还是kCVPixelFormatType_32ARGB？究竟是0～255的取值还是0～1还是-1～1？究竟要不要适用mean还是std？
+
+1，RGB还是BGR
+
+关于是RGB还是BGR，你在使用coremltools进行转换的时候，通过is_bgr参数来指明：
+
+args = dict(is_bgr=False, ......)
+2，是否归一化
+
+使用image_scale参数来指明：
+
+scale = 1.0 / 255.0
+args = dict(is_bgr=False, image_scale = scale,......)
+3，是否做normalization
+
+标准的normalization的公式为：normalized = (data - mean) / std，像素的值减去均值，再除以方差。CoreML使用的是类似的公式：normalized = data*image_scale + bias。如此换算下来，大致相当于：
+
+red_bias = -red_mean
+green_bias = -green_mean
+blue_bias = -blue_mean
+image_scale参数又要扮演方差的角色了：
+
+image_scale = 1 / std
+//bias也要除以std
+red_bias /= std
+green_bias /= std
+blue_bias /= std
+Gemfield来举几个例子：
+
+1，输入是0-255
+
+image_scale = 1
+red_bias = 0
+green_bias = 0
+blue_bias = 0
+2，输入是0 - 1
+
+image_scale = 1/255.0
+red_bias = 0
+green_bias = 0
+blue_bias = 0
+3，输入是-1 ～ 1
+
+image_scale = 2/255.0
+red_bias = -1
+green_bias = -1
+blue_bias = -1
+4，Caffe模型
+
+red_bias = -123.68
+green_bias = -116.779
+blue_bias = -103.939
+is_bgr = True
+
+//需要normalize的话，方差是58.8， 1/58.8 = 0.017
+image_scale = 0.017
+red_bias = -123.68 * 0.017
+green_bias = -116.779 * 0.017
+blue_bias = -103.939 * 0.017
+is_bgr = True
+5，PyTorch模型
+
+PyTorch训练的时候，一般会对图像进行如下预处理：
+
+def preprocess_input(x):
+    x /= 255.0
+    mean = [0.485, 0.456, 0.406]
+    std = [0.229, 0.224, 0.225]
+    return (x - mean) / std
+这个就麻烦了，因为每个通道的方差不一样，而我们只有一个image_scale参数来扮演这个角色！只能大致加权出来一个了方差了：
+
+image_scale = 1.0 / (255.0 * 0.226)
+red_bias = -0.485 / 0.226
+green_bias = -0.456 / 0.226
+blue_bias = -0.406 / 0.226
+0.226就是这样估计出来的。要想更精确，只能手写代码来对每个像素进行计算了：
+
+//R
+normalizedBuffer[i] = (Float32(dstData.load(fromByteOffset: i * 4 + 2, as: UInt8.self)) / 255.0 - 0.485) / 0.229
+//G
+normalizedBuffer[width * height + i] = (Float32(dstData.load(fromByteOffset: i * 4 + 1, as: UInt8.self)) / 255.0 - 0.456) / 0.224
+//B
+normalizedBuffer[width * height * 2 + i] = (Float32(dstData.load(fromByteOffset: i * 4 + 0, as: UInt8.self)) / 255.0 - 0.406) / 0.225
+顺便的把BGR转换成了RGB三个平面（从hwc到chw）。
+
+总结
+总结下来，这个转换过程就是从PyTorch到ONNX，再从ONNX到CoreML，这个转换过程不会总是一帆风顺。前者从PyTorch到ONNX转换所用到的函数都属于PyTorch项目，因此出现问题的概率相对比较小；而从ONNX到CoreML转换的过程中，除了几个经典的网络，或者极其简单的网络外，一般都会有各种各样的问题，这是不同软件生态之间磨合必然的代价。比如下面的一些错误：
+
+NotImplementedError: Unsupported ONNX ops of type: Shape,Gather,Expand
+再比如错误：
+
+TypeError: Error while converting op of type: Conv. Error message: provided number axes -1 not supported
+遇到类似错误，可以评论留言。
