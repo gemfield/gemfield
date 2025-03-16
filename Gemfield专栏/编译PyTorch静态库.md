@@ -694,3 +694,31 @@ root@gemfield:~# export LIBRARY_PATH=$LIBRARY_PATH:/usr/local/cuda-10.2/targets/
 # 最后
 在你使用pytorch静态库的时候，或多或少还会遇到一些问题。但是，何必自讨苦吃呢，使用我们封装了libtorch的libdeepvac库吧：
 DeepVAC/libdeepvac
+
+一个编译命令：
+```
+export TORCH_CUDA_ARCH_LIST="6.1;7.0;7.5;7.5+PTX"
+
+cmake \
+-DCMAKE_VERBOSE_MAKEFILE:BOOL=1 \
+-DUSE_CUDA=ON \
+-DUSE_OPENMP=ON \
+-DBUILD_CAFFE2=ON \
+-DBUILD_CAFFE2_OPS=ON \
+-DUSE_DISTRIBUTED=OFF \
+-DBUILD_TEST=OFF \
+-DBUILD_BINARY=OFF \
+-DBUILD_MOBILE_BENCHMARK=0 \
+-DBUILD_MOBILE_TEST=0 \
+-DUSE_ROCM=OFF \
+-DUSE_GLOO=OFF \
+-DUSE_LEVELDB=OFF \
+-DUSE_MPI:BOOL=OFF \
+-DBUILD_PYTHON:BOOL=OFF \
+-DBUILD_CUSTOM_PROTOBUF:BOOL=OFF \
+-DBUILD_SHARED_LIBS:BOOL=OFF \
+-DCMAKE_BUILD_TYPE:STRING=Release \
+-DPYTHON_EXECUTABLE:PATH=`which python3` \
+-DCMAKE_INSTALL_PREFIX:PATH=../libtorch_cuda \
+../pytorch
+```
